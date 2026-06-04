@@ -44,10 +44,17 @@ Load the plugin through your client using this repository's `manifest.json`.
 Repo layout:
 
 - `manifest.json`
+- `index.js`
 - `src/index.ts`
 - `src/settings.tsx`
 
-If you publish the repo remotely, point the client at the raw `manifest.json` URL.
+For GitHub Pages / unproxied installs, the loader should fetch these root files directly:
+
+- `https://ilovetob4k3-dot.github.io/SafeProfileActions/manifest.json`
+- `https://ilovetob4k3-dot.github.io/SafeProfileActions/index.js`
+
+`manifest.json` includes a root `hash` field and points `main` to the standalone `index.js` entry.
+Update the manifest hash whenever `index.js` changes.
 
 ## Settings
 
@@ -55,6 +62,8 @@ If you publish the repo remotely, point the client at the raw `manifest.json` UR
 - `Hide Message`: hides the profile message button.
 - `Hide Call`: optionally hides the profile phone/call button.
 - `Debug mode`: logs sanitized button metadata such as prop keys, accessibility labels, visible labels, and icon/source names when available.
+
+The install entrypoint is the bundled root `index.js`. The files in `src/` remain as development/source reference.
 
 Debug logging never includes:
 
