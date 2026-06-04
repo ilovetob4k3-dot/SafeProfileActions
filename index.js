@@ -1,17 +1,7 @@
-var SafeProfileActions = (function () {
+(function (vendetta) {
     "use strict";
 
-    var root =
-        typeof globalThis !== "undefined"
-            ? globalThis
-            : typeof window !== "undefined"
-              ? window
-              : typeof self !== "undefined"
-                ? self
-                : {};
-
-    var vendetta =
-        (root && (root.vendetta || root.__vendetta || root.revenge || root.kettu)) || {};
+    vendetta = vendetta || {};
 
     var metro = vendetta.metro || {};
     var common = metro.common || {};
@@ -530,10 +520,4 @@ var SafeProfileActions = (function () {
         },
         settings: Settings,
     };
-})();
-
-if (typeof module !== "undefined" && module && module.exports != null) {
-    module.exports = SafeProfileActions;
-}
-
-SafeProfileActions;
+})(vendetta);
