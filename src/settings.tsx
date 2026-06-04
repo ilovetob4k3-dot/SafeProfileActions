@@ -33,7 +33,7 @@ export default function Settings() {
                     label="Debug mode"
                     value={storage.debugMode ?? false}
                     onValueChange={(value) => (storage.debugMode = value)}
-                    note="Logs sanitized button metadata only. No user or session data is logged."
+                    note="Shows sanitized logs and verification toasts for profile action rows. No user or session data is logged."
                 />
             </View>
         </ScrollView>

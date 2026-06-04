@@ -11,6 +11,7 @@
     var components = ui.components || {};
     var Forms = components.Forms || {};
     var assets = ui.assets || {};
+    var toasts = ui.toasts || {};
     var storageApi = vendetta.storage || {};
     var logger =
         vendetta.logger ||
@@ -27,6 +28,7 @@
     var after = typeof patcher.after === "function" ? patcher.after : null;
     var storage = pluginApi.storage || {};
     var getAssetIDByName = typeof assets.getAssetIDByName === "function" ? assets.getAssetIDByName : null;
+    var showToast = typeof toasts.showToast === "function" ? toasts.showToast : null;
     var useProxy = typeof storageApi.useProxy === "function" ? storageApi.useProxy : null;
 
     var React = common.React || null;
@@ -36,13 +38,20 @@
     var Text = ReactNative.Text || null;
 
     var PLUGIN_NAME = "SafeProfileActions";
+    var ACTION_KEYS = ["addFriend", "message", "call"];
+    var CONTACT_ROW_INDEX_ACTIONS = ["addFriend", "message", "call"];
+    var ACTION_DISPLAY_NAMES = {
+        addFriend: "Add Friend",
+        message: "Message",
+        call: "Call",
+    };
+    var DEBUG_TOAST_ICON = "ic_message";
     var DEFAULT_SETTINGS = {
         hideAddFriend: true,
         hideMessage: true,
         hideCall: false,
         debugMode: false,
     };
-    var ACTIONS = ["addFriend", "message", "call"];
     var ACTION_LABELS = {
         addFriend: ["add friend", "send friend request"],
         message: ["message", "send message"],
@@ -84,6 +93,11 @@
         call: new Set(),
     };
     var patches = [];
+    var debugToastCache = new Set();
+
+    function isDebugEnabled() {
+        return Boolean(storage.debugMode == null ? DEFAULT_SETTINGS.debugMode : storage.debugMode);
+    }
 
     function log(method, message, metadata) {
         if (!logger || typeof logger[method] !== "function") return;
@@ -91,13 +105,21 @@
         else logger[method]("[" + PLUGIN_NAME + "] " + message, metadata);
     }
 
-    function isDebugEnabled() {
-        return Boolean(storage.debugMode == null ? DEFAULT_SETTINGS.debugMode : storage.debugMode);
-    }
-
     function debugLog(message, metadata) {
         if (!isDebugEnabled()) return;
         log("log", message, metadata);
+    }
+
+    function debugToastOnce(key, message) {
+        if (!isDebugEnabled() || debugToastCache.has(key) || !showToast) return;
+        debugToastCache.add(key);
+
+        try {
+            showToast(
+                "[" + PLUGIN_NAME + "] " + message,
+                getAssetIDByName ? getAssetIDByName(DEBUG_TOAST_ICON) : void 0
+            );
+        } catch {}
     }
 
     function initSettings() {
@@ -111,14 +133,15 @@
         var i;
         var j;
 
-        for (i = 0; i < ACTIONS.length; i++) {
-            assetIds[ACTIONS[i]].clear();
+        for (i = 0; i < ACTION_KEYS.length; i++) {
+            var action = ACTION_KEYS[i];
+            assetIds[action].clear();
 
             if (!getAssetIDByName) continue;
 
-            for (j = 0; j < ACTION_ASSET_NAMES[ACTIONS[i]].length; j++) {
-                var assetId = getAssetIDByName(ACTION_ASSET_NAMES[ACTIONS[i]][j]);
-                if (assetId != null) assetIds[ACTIONS[i]].add(assetId);
+            for (j = 0; j < ACTION_ASSET_NAMES[action].length; j++) {
+                var assetId = getAssetIDByName(ACTION_ASSET_NAMES[action][j]);
+                if (assetId != null) assetIds[action].add(assetId);
             }
         }
     }
@@ -145,6 +168,32 @@
         }
 
         return results;
+    }
+
+    function uniqueActions(actions) {
+        var seen = new Set();
+        var results = [];
+        var i;
+
+        for (i = 0; i < actions.length; i++) {
+            if (seen.has(actions[i])) continue;
+            seen.add(actions[i]);
+            results.push(actions[i]);
+        }
+
+        return results;
+    }
+
+    function summarizeActions(actions) {
+        var names = [];
+        var unique = uniqueActions(actions);
+        var i;
+
+        for (i = 0; i < unique.length; i++) {
+            names.push(ACTION_DISPLAY_NAMES[unique[i]]);
+        }
+
+        return names.join(", ");
     }
 
     function isObject(value) {
@@ -221,9 +270,10 @@
         if (typeof assetRef === "string") return assetRef;
 
         if (typeof assetRef === "number") {
-            var asset = reverseAssetLookup && reverseAssetLookup.getAssetByID
-                ? reverseAssetLookup.getAssetByID(assetRef)
-                : null;
+            var asset =
+                reverseAssetLookup && reverseAssetLookup.getAssetByID
+                    ? reverseAssetLookup.getAssetByID(assetRef)
+                    : null;
             return asset && typeof asset.name === "string" ? asset.name : null;
         }
 
@@ -241,12 +291,12 @@
         var strings = [];
         var assetRefs = [];
         var props = node.props || {};
+        var assetNames = [];
+        var i;
 
         collectStrings(props, strings);
         collectAssetRefs(props, assetRefs);
 
-        var assetNames = [];
-        var i;
         for (i = 0; i < assetRefs.length; i++) {
             var assetName = resolveAssetName(assetRefs[i]);
             if (assetName) assetNames.push(assetName);
@@ -254,9 +304,34 @@
 
         return {
             propKeys: Object.keys(props).sort(),
-            accessibilityLabel: typeof props.accessibilityLabel === "string" ? props.accessibilityLabel : null,
-            labels: uniqueStrings(strings).slice(0, 6),
-            assetNames: uniqueStrings(assetNames).slice(0, 6),
+            labels: uniqueStrings(strings).slice(0, 8),
+            assetNames: uniqueStrings(assetNames).slice(0, 8),
+        };
+    }
+
+    function sanitizeLabelsForDebug(labels) {
+        var hints = new Set();
+        var i;
+        var j;
+
+        for (i = 0; i < labels.length; i++) {
+            for (j = 0; j < ACTION_KEYS.length; j++) {
+                var action = ACTION_KEYS[j];
+                if (matchesNeedle([labels[i]], ACTION_LABELS[action])) {
+                    hints.add(ACTION_DISPLAY_NAMES[action]);
+                }
+            }
+        }
+
+        return Array.from(hints);
+    }
+
+    function getDebugMetadata(node) {
+        var metadata = extractMetadata(node);
+        return {
+            propKeys: metadata.propKeys,
+            labelHints: sanitizeLabelsForDebug(metadata.labels),
+            assetNames: metadata.assetNames,
         };
     }
 
@@ -316,18 +391,18 @@
 
         metadata = extractMetadata(node);
 
-        for (i = 0; i < ACTIONS.length; i++) {
-            action = ACTIONS[i];
+        for (i = 0; i < ACTION_KEYS.length; i++) {
+            action = ACTION_KEYS[i];
             if (matchesNeedle(metadata.labels, ACTION_LABELS[action])) return action;
         }
 
-        for (i = 0; i < ACTIONS.length; i++) {
-            action = ACTIONS[i];
+        for (i = 0; i < ACTION_KEYS.length; i++) {
+            action = ACTION_KEYS[i];
             if (matchesKnownProps(node, action)) return action;
         }
 
-        for (i = 0; i < ACTIONS.length; i++) {
-            action = ACTIONS[i];
+        for (i = 0; i < ACTION_KEYS.length; i++) {
+            action = ACTION_KEYS[i];
             if (matchesAsset(node, action)) return action;
         }
 
@@ -342,6 +417,187 @@
             return Boolean(storage.hideMessage == null ? DEFAULT_SETTINGS.hideMessage : storage.hideMessage);
         }
         return Boolean(storage.hideCall == null ? DEFAULT_SETTINGS.hideCall : storage.hideCall);
+    }
+
+    function getChildrenArraySlot(owner, basePath) {
+        if (!isObject(owner)) return null;
+
+        if (Array.isArray(owner.children)) {
+            return {
+                owner: owner,
+                key: "children",
+                buttons: owner.children,
+                path: basePath + ".children",
+            };
+        }
+
+        if (isObject(owner.children && owner.children.props) && Array.isArray(owner.children.props.children)) {
+            return {
+                owner: owner.children.props,
+                key: "children",
+                buttons: owner.children.props.children,
+                path: basePath + ".children.props.children",
+            };
+        }
+
+        return null;
+    }
+
+    function getUserProfileActionsSlot(component) {
+        return (
+            getChildrenArraySlot(
+                component && component.props && component.props.children && component.props.children.props
+                    ? component.props.children.props.children &&
+                          component.props.children.props.children[1] &&
+                          component.props.children.props.children[1].props
+                    : null,
+                "component.props.children.props.children[1].props"
+            ) ||
+            getChildrenArraySlot(
+                component && component.props && component.props.children && component.props.children[1]
+                    ? component.props.children[1].props
+                    : null,
+                "component.props.children[1].props"
+            )
+        );
+    }
+
+    function getContactButtonsSlot(component) {
+        return (
+            getChildrenArraySlot(component && component.props ? component.props : null, "component.props") ||
+            getChildrenArraySlot(
+                component && component.props && component.props.children ? component.props.children.props : null,
+                "component.props.children.props"
+            )
+        );
+    }
+
+    function logButtonScan(componentName, buttonPath, node, matchedAction, fallbackAction) {
+        var metadata;
+
+        if (!isDebugEnabled() || !isObject(node) || !isObject(node.props)) return;
+
+        metadata = getDebugMetadata(node);
+        debugLog("Scanned button in " + componentName + ".", {
+            buttonPath: buttonPath,
+            matchedAction: matchedAction,
+            fallbackAction: fallbackAction == null ? null : fallbackAction,
+            propKeys: metadata.propKeys,
+            labelHints: metadata.labelHints,
+            assetNames: metadata.assetNames,
+        });
+    }
+
+    function removeButtonsFromArray(buttons, componentName, rowPath, allowIndexFallback) {
+        var removed = [];
+        var nextButtons = [];
+        var anyChanged = false;
+        var i;
+
+        for (i = 0; i < buttons.length; i++) {
+            var button = buttons[i];
+            var buttonPath = rowPath + "[" + i + "]";
+            var matchedAction = isObject(button) ? getMatchedAction(button) : null;
+            var fallbackAction =
+                !matchedAction && allowIndexFallback && buttons.length === CONTACT_ROW_INDEX_ACTIONS.length
+                    ? CONTACT_ROW_INDEX_ACTIONS[i] || null
+                    : null;
+
+            logButtonScan(componentName, buttonPath, button, matchedAction, fallbackAction);
+
+            var nestedSlot =
+                isObject(button) && isObject(button.props)
+                    ? getChildrenArraySlot(button.props, buttonPath + ".props")
+                    : null;
+
+            if (nestedSlot) {
+                var nestedResult = removeButtonsFromArray(nestedSlot.buttons, componentName, nestedSlot.path, false);
+                if (nestedResult.changed) {
+                    nestedSlot.owner[nestedSlot.key] = nestedResult.buttons;
+                    anyChanged = true;
+                }
+
+                if (nestedResult.removed.length) {
+                    removed = removed.concat(nestedResult.removed);
+                }
+
+                if (nestedResult.buttons.length === 0 && !matchedAction) {
+                    anyChanged = true;
+                    continue;
+                }
+            }
+
+            var actionToRemove = matchedAction || fallbackAction;
+            if (actionToRemove && shouldHide(actionToRemove)) {
+                removed.push(actionToRemove);
+                anyChanged = true;
+
+                debugLog("Removed " + ACTION_DISPLAY_NAMES[actionToRemove] + " from " + componentName + ".", {
+                    buttonPath: buttonPath,
+                    reason: matchedAction ? "matched" : "indexFallback",
+                });
+                continue;
+            }
+
+            nextButtons.push(button);
+        }
+
+        return {
+            buttons: nextButtons,
+            changed: anyChanged || nextButtons.length !== buttons.length,
+            removed: uniqueActions(removed),
+        };
+    }
+
+    function pruneProfileActionRow(component, componentName) {
+        var slot =
+            componentName === "UserProfileActions"
+                ? getUserProfileActionsSlot(component)
+                : getContactButtonsSlot(component);
+
+        if (!slot) {
+            debugLog("No targeted action row found for " + componentName + ".");
+            debugToastOnce("row-missing:" + componentName, componentName + " row not found");
+            return component;
+        }
+
+        debugLog("Found targeted action row for " + componentName + ".", {
+            rowPath: slot.path,
+            buttonsSeen: slot.buttons.length,
+        });
+        debugToastOnce(
+            "row-found:" + componentName + ":" + slot.path,
+            componentName + ": saw " + slot.buttons.length + " buttons"
+        );
+
+        var result = removeButtonsFromArray(
+            slot.buttons,
+            componentName,
+            slot.path,
+            true
+        );
+
+        if (result.changed) {
+            slot.owner[slot.key] = result.buttons;
+        }
+
+        debugLog("Finished targeted prune for " + componentName + ".", {
+            rowPath: slot.path,
+            buttonsSeen: slot.buttons.length,
+            buttonsRemaining: result.buttons.length,
+            removed: result.removed.map(function (action) {
+                return ACTION_DISPLAY_NAMES[action];
+            }),
+        });
+
+        if (result.removed.length) {
+            debugToastOnce(
+                "removed:" + componentName + ":" + slot.path + ":" + result.removed.join(","),
+                componentName + ": removed " + summarizeActions(result.removed)
+            );
+        }
+
+        return component;
     }
 
     function pruneTree(node, componentName) {
@@ -363,11 +619,10 @@
 
         matchedAction = getMatchedAction(node);
         if (matchedAction && shouldHide(matchedAction)) {
-            metadata = extractMetadata(node);
-            debugLog("Removed " + matchedAction + " button from " + componentName + ".", {
+            metadata = getDebugMetadata(node);
+            debugLog("Fallback removed " + ACTION_DISPLAY_NAMES[matchedAction] + " from " + componentName + ".", {
                 propKeys: metadata.propKeys,
-                accessibilityLabel: metadata.accessibilityLabel,
-                labels: metadata.labels,
+                labelHints: metadata.labelHints,
                 assetNames: metadata.assetNames,
             });
             return null;
@@ -383,6 +638,7 @@
     function patchProfileComponent(module, componentName) {
         if (!module) {
             debugLog("Component not found: " + componentName + ".");
+            debugToastOnce("component-missing:" + componentName, componentName + " not found");
             return;
         }
 
@@ -391,11 +647,15 @@
             return;
         }
 
+        debugLog("Component found: " + componentName + ".");
+        debugToastOnce("component-found:" + componentName, componentName + " patched");
+
         try {
             patches.push(
                 after("default", module, function (_, rendered) {
                     try {
-                        return pruneTree(rendered, componentName);
+                        var targeted = pruneProfileActionRow(rendered, componentName);
+                        return pruneTree(targeted, componentName);
                     } catch (error) {
                         debugLog("Failed to traverse " + componentName + ".", {
                             error: String(error),
@@ -423,7 +683,10 @@
 
         moduleEntries = [
             { name: "UserProfileActions", module: findByName("UserProfileActions", false) },
-            { name: "SimplifiedUserProfileContactButtons", module: findByName("SimplifiedUserProfileContactButtons", false) },
+            {
+                name: "SimplifiedUserProfileContactButtons",
+                module: findByName("SimplifiedUserProfileContactButtons", false),
+            },
             { name: "UserProfileContactButtons", module: findByName("UserProfileContactButtons", false) },
         ];
 
@@ -431,7 +694,13 @@
             var entry = moduleEntries[i];
 
             if (!entry.module || seen.has(entry.module)) {
-                if (!entry.module) debugLog("Component unavailable on this build: " + entry.name + ".");
+                if (!entry.module) {
+                    debugLog("Component unavailable on this build: " + entry.name + ".");
+                    debugToastOnce(
+                        "component-unavailable:" + entry.name,
+                        entry.name + " unavailable"
+                    );
+                }
                 continue;
             }
 
@@ -487,7 +756,7 @@
                     createSwitchRow(
                         "debugMode",
                         "Debug mode",
-                        "Logs sanitized button metadata only. No user or session data is logged.",
+                        "Shows sanitized logs and verification toasts for profile action rows. No user or session data is logged.",
                         DEFAULT_SETTINGS.debugMode
                     )
                 )
@@ -508,7 +777,10 @@
     return {
         onLoad: function () {
             initSettings();
+            debugToastCache = new Set();
             initAssetIds();
+            log("log", "Plugin loaded.");
+            debugToastOnce("plugin-loaded", "Plugin loaded");
             loadPatches();
         },
         onUnload: function () {
@@ -517,6 +789,7 @@
                 if (typeof patches[i] === "function") patches[i]();
             }
             patches = [];
+            debugToastCache = new Set();
         },
         settings: Settings,
     };
