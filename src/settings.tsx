@@ -12,28 +12,22 @@ export default function Settings() {
         <ScrollView>
             <View>
                 <Forms.FormSwitchRow
-                    label="Hide Add Friend"
-                    value={storage.hideAddFriend ?? true}
-                    onValueChange={(value) => (storage.hideAddFriend = value)}
-                    note="Hides the large Add Friend button on user profiles."
+                    label="Probe mode"
+                    value={storage.probeMode ?? true}
+                    onValueChange={(value) => (storage.probeMode = value)}
+                    note="Shows sanitized load/runtime probe toasts and logs for profile action components."
                 />
                 <Forms.FormSwitchRow
-                    label="Hide Message"
-                    value={storage.hideMessage ?? true}
-                    onValueChange={(value) => (storage.hideMessage = value)}
-                    note="Hides the message button on user profiles."
+                    label="Probe: hide entire matched profile component"
+                    value={storage.probeHideMatchedComponent ?? false}
+                    onValueChange={(value) => (storage.probeHideMatchedComponent = value)}
+                    note="Returns null from each matched profile/action/contact component render."
                 />
                 <Forms.FormSwitchRow
-                    label="Hide Call"
-                    value={storage.hideCall ?? false}
-                    onValueChange={(value) => (storage.hideCall = value)}
-                    note="Optionally hides the phone/call button on user profiles."
-                />
-                <Forms.FormSwitchRow
-                    label="Debug mode"
-                    value={storage.debugMode ?? false}
-                    onValueChange={(value) => (storage.debugMode = value)}
-                    note="Shows sanitized logs and verification toasts for profile action rows. No user or session data is logged."
+                    label="Probe: hide suspected action row"
+                    value={storage.probeHideSuspectedActionRow ?? false}
+                    onValueChange={(value) => (storage.probeHideSuspectedActionRow = value)}
+                    note="Removes the highest-confidence action-row container inside the matched component."
                 />
             </View>
         </ScrollView>
