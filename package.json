@@ -1,0 +1,11 @@
+{
+    "name": "safe-profile-actions",
+    "private": true,
+    "scripts": {
+        "typecheck": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3",
+        "vendetta-types": "latest"
+    }
+}

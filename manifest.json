@@ -1,0 +1,14 @@
+{
+    "name": "SafeProfileActions",
+    "description": "Visually hides risky user profile action buttons to reduce accidental taps.",
+    "authors": [
+        {
+            "name": "Codex",
+            "id": "0"
+        }
+    ],
+    "main": "src/index.ts",
+    "vendetta": {
+        "icon": "ic_call_ended"
+    }
+}
