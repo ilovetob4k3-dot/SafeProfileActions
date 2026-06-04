@@ -1,0 +1,3 @@
+[submodule "references/shipwr3ckd-revengeplugin"]
+	path = references/shipwr3ckd-revengeplugin
+	url = https://github.com/shipwr3ckd/revengeplugin.git
