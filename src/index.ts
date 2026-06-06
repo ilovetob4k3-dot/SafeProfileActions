@@ -7,10 +7,11 @@ import { showToast } from "@vendetta/ui/toasts";
 import Settings from "./settings";
 
 const DEFAULT_SETTINGS = {
+    blockAddFriends: true,
     showBlockToast: false,
-    confirmReactions: true,
-    doubleConfirmReactions: true,
+    confirmReact: true,
     showEmojiInPrompt: false,
+    noTyping: false,
 };
 
 const REACT_PROMPT_1 = {
@@ -31,10 +32,11 @@ let unpatches: Array<() => void> = [];
 let reactionBypass = false;
 
 function initSettings() {
+    storage.blockAddFriends ??= DEFAULT_SETTINGS.blockAddFriends;
     storage.showBlockToast ??= DEFAULT_SETTINGS.showBlockToast;
-    storage.confirmReactions ??= DEFAULT_SETTINGS.confirmReactions;
-    storage.doubleConfirmReactions ??= DEFAULT_SETTINGS.doubleConfirmReactions;
+    storage.confirmReact ??= storage.doubleConfirmReactions ?? storage.confirmReactions ?? DEFAULT_SETTINGS.confirmReact;
     storage.showEmojiInPrompt ??= DEFAULT_SETTINGS.showEmojiInPrompt;
+    storage.noTyping ??= DEFAULT_SETTINGS.noTyping;
 }
 
 function safeUnpatchAll() {
@@ -62,6 +64,11 @@ function resolveRelationshipManager() {
 function resolveReactionManager() {
     const reactionManager = findByProps("addReaction");
     return typeof reactionManager?.addReaction === "function" ? reactionManager : null;
+}
+
+function resolveTypingManager() {
+    const typingManager = findByProps("startTyping");
+    return typeof typingManager?.startTyping === "function" ? typingManager : null;
 }
 
 function shouldBlockAddFriend(args: unknown[]) {
@@ -165,16 +172,14 @@ async function confirmAndAddReaction(context: unknown, orig: Function | undefine
 
     if (!firstConfirmed) return;
 
-    if (storage.doubleConfirmReactions) {
-        const secondConfirmed = await showConfirmationPrompt({
-            title: REACT_PROMPT_2.title,
-            body: getReactionPromptBody(REACT_PROMPT_2.body, args),
-            confirmText: REACT_PROMPT_2.confirmText,
-            cancelText: REACT_PROMPT_2.cancelText,
-        });
+    const secondConfirmed = await showConfirmationPrompt({
+        title: REACT_PROMPT_2.title,
+        body: getReactionPromptBody(REACT_PROMPT_2.body, args),
+        confirmText: REACT_PROMPT_2.confirmText,
+        cancelText: REACT_PROMPT_2.cancelText,
+    });
 
-        if (!secondConfirmed) return;
-    }
+    if (!secondConfirmed) return;
 
     callOriginalAddReaction(context, orig, args);
 }
@@ -186,8 +191,8 @@ function patchAddFriendBlocker() {
     const unpatch = instead("addRelationship", relationshipManager, (args, orig) => {
         const normalizedArgs = Array.isArray(args) ? args : [];
 
-        if (!shouldBlockAddFriend(normalizedArgs)) {
-            return typeof orig === "function" ? orig.apply(relationshipManager, args) : undefined;
+        if (!storage.blockAddFriends || !shouldBlockAddFriend(normalizedArgs)) {
+            return typeof orig === "function" ? orig.apply(relationshipManager, normalizedArgs) : undefined;
         }
 
         if (storage.showBlockToast) {
@@ -209,8 +214,8 @@ function patchReactionConfirmation() {
     const unpatch = instead("addReaction", reactionManager, (args, orig) => {
         const normalizedArgs = Array.isArray(args) ? args : [];
 
-        if (reactionBypass || !storage.confirmReactions) {
-            return typeof orig === "function" ? orig.apply(reactionManager, args) : undefined;
+        if (reactionBypass || !storage.confirmReact) {
+            return typeof orig === "function" ? orig.apply(reactionManager, normalizedArgs) : undefined;
         }
 
         void confirmAndAddReaction(reactionManager, orig, normalizedArgs);
@@ -222,6 +227,32 @@ function patchReactionConfirmation() {
     }
 }
 
+function patchTypingManager() {
+    const typingManager = resolveTypingManager();
+    if (!typingManager) return;
+
+    const patchTypingMethod = (methodName: "startTyping" | "stopTyping") => {
+        if (typeof typingManager[methodName] !== "function") return;
+
+        const unpatch = instead(methodName, typingManager, (args, orig) => {
+            const normalizedArgs = Array.isArray(args) ? args : [];
+
+            if (!storage.noTyping) {
+                return typeof orig === "function" ? orig.apply(typingManager, normalizedArgs) : undefined;
+            }
+
+            return undefined;
+        });
+
+        if (typeof unpatch === "function") {
+            unpatches.push(unpatch);
+        }
+    };
+
+    patchTypingMethod("startTyping");
+    patchTypingMethod("stopTyping");
+}
+
 export default {
     onLoad: () => {
         try {
@@ -229,6 +260,8 @@ export default {
             safeUnpatchAll();
             patchAddFriendBlocker();
             patchReactionConfirmation();
+            patchTypingManager();
+            // TODO: Add Hide Call Buttons patches here once that plugin's source/link is provided.
         } catch {}
     },
 

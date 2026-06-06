@@ -21,6 +21,7 @@
     var ReactNative = common.ReactNative || {};
     var Alert = ReactNative.Alert || common.Alert || null;
     var ScrollView = ReactNative.ScrollView || null;
+    var Text = ReactNative.Text || null;
     var View = ReactNative.View || null;
     var FormSection = Forms.FormSection || null;
     var FormSwitchRow = Forms.FormSwitchRow || null;
@@ -29,10 +30,11 @@
     var useProxy = typeof storageApi.useProxy === "function" ? storageApi.useProxy : null;
 
     var DEFAULT_SETTINGS = {
+        blockAddFriends: true,
         showBlockToast: false,
-        confirmReactions: true,
-        doubleConfirmReactions: true,
+        confirmReact: true,
         showEmojiInPrompt: false,
+        noTyping: false,
     };
 
     var REACT_PROMPT_1 = {
@@ -53,20 +55,25 @@
     var reactionBypass = false;
 
     function initSettings() {
+        if (storage.blockAddFriends == null) {
+            storage.blockAddFriends = DEFAULT_SETTINGS.blockAddFriends;
+        }
+
         if (storage.showBlockToast == null) {
             storage.showBlockToast = DEFAULT_SETTINGS.showBlockToast;
         }
 
-        if (storage.confirmReactions == null) {
-            storage.confirmReactions = DEFAULT_SETTINGS.confirmReactions;
-        }
-
-        if (storage.doubleConfirmReactions == null) {
-            storage.doubleConfirmReactions = DEFAULT_SETTINGS.doubleConfirmReactions;
+        if (storage.confirmReact == null) {
+            storage.confirmReact =
+                storage.doubleConfirmReactions ?? storage.confirmReactions ?? DEFAULT_SETTINGS.confirmReact;
         }
 
         if (storage.showEmojiInPrompt == null) {
             storage.showEmojiInPrompt = DEFAULT_SETTINGS.showEmojiInPrompt;
+        }
+
+        if (storage.noTyping == null) {
+            storage.noTyping = DEFAULT_SETTINGS.noTyping;
         }
     }
 
@@ -112,6 +119,16 @@
             typeof reactionManager.addReaction === "function"
         ) {
             return reactionManager;
+        }
+
+        return null;
+    }
+
+    function resolveTypingManager() {
+        var typingManager = findByProps ? findByProps("startTyping") : null;
+
+        if (typingManager && typeof typingManager === "object" && typeof typingManager.startTyping === "function") {
+            return typingManager;
         }
 
         return null;
@@ -224,17 +241,15 @@
             return;
         }
 
-        if (storage.doubleConfirmReactions) {
-            secondConfirmed = await showConfirmationPrompt({
-                title: REACT_PROMPT_2.title,
-                body: getReactionPromptBody(REACT_PROMPT_2.body, args),
-                confirmText: REACT_PROMPT_2.confirmText,
-                cancelText: REACT_PROMPT_2.cancelText,
-            });
+        secondConfirmed = await showConfirmationPrompt({
+            title: REACT_PROMPT_2.title,
+            body: getReactionPromptBody(REACT_PROMPT_2.body, args),
+            confirmText: REACT_PROMPT_2.confirmText,
+            cancelText: REACT_PROMPT_2.cancelText,
+        });
 
-            if (!secondConfirmed) {
-                return;
-            }
+        if (!secondConfirmed) {
+            return;
         }
 
         callOriginalAddReaction(context, orig, args);
@@ -251,8 +266,8 @@
         unpatch = instead("addRelationship", relationshipManager, function (args, orig) {
             var normalizedArgs = Array.isArray(args) ? args : [];
 
-            if (!shouldBlockAddFriend(normalizedArgs)) {
-                return typeof orig === "function" ? orig.apply(relationshipManager, args) : void 0;
+            if (!storage.blockAddFriends || !shouldBlockAddFriend(normalizedArgs)) {
+                return typeof orig === "function" ? orig.apply(relationshipManager, normalizedArgs) : void 0;
             }
 
             if (storage.showBlockToast) {
@@ -278,8 +293,8 @@
         unpatch = instead("addReaction", reactionManager, function (args, orig) {
             var normalizedArgs = Array.isArray(args) ? args : [];
 
-            if (reactionBypass || !storage.confirmReactions) {
-                return typeof orig === "function" ? orig.apply(reactionManager, args) : void 0;
+            if (reactionBypass || !storage.confirmReact) {
+                return typeof orig === "function" ? orig.apply(reactionManager, normalizedArgs) : void 0;
             }
 
             void confirmAndAddReaction(reactionManager, orig, normalizedArgs);
@@ -289,6 +304,39 @@
         if (typeof unpatch === "function") {
             unpatches.push(unpatch);
         }
+    }
+
+    function patchTypingManager() {
+        var typingManager = resolveTypingManager();
+
+        function patchTypingMethod(methodName) {
+            var unpatch;
+
+            if (!typingManager || !instead || typeof typingManager[methodName] !== "function") {
+                return;
+            }
+
+            unpatch = instead(methodName, typingManager, function (args, orig) {
+                var normalizedArgs = Array.isArray(args) ? args : [];
+
+                if (!storage.noTyping) {
+                    return typeof orig === "function" ? orig.apply(typingManager, normalizedArgs) : void 0;
+                }
+
+                return void 0;
+            });
+
+            if (typeof unpatch === "function") {
+                unpatches.push(unpatch);
+            }
+        }
+
+        if (!typingManager) {
+            return;
+        }
+
+        patchTypingMethod("startTyping");
+        patchTypingMethod("stopTyping");
     }
 
     function renderSwitchRow(label, key, fallbackValue, note) {
@@ -335,22 +383,38 @@
                 null,
                 renderSection("Add Friend", [
                     renderSwitchRow(
+                        "Block Add Friends",
+                        "blockAddFriends",
+                        DEFAULT_SETTINGS.blockAddFriends,
+                    ),
+                    renderSwitchRow(
                         "Show Add Friend Block Toast",
                         "showBlockToast",
                         DEFAULT_SETTINGS.showBlockToast,
                         'Shows "oops lol" when Add Friend is blocked.',
                     ),
                 ]),
+                renderSection("Calls", [
+                    Text
+                        ? React.createElement(
+                              Text,
+                              null,
+                              "Hide Call Buttons source is not included in this repo/context yet, so no call-button toggles are enabled.",
+                          )
+                        : null,
+                ]),
+                renderSection("Typing", [
+                    renderSwitchRow(
+                        "Hide Typing Indicator",
+                        "noTyping",
+                        DEFAULT_SETTINGS.noTyping,
+                    ),
+                ]),
                 renderSection("Reactions", [
                     renderSwitchRow(
-                        "Confirm Reactions",
-                        "confirmReactions",
-                        DEFAULT_SETTINGS.confirmReactions,
-                    ),
-                    renderSwitchRow(
-                        "Double Confirm Reactions",
-                        "doubleConfirmReactions",
-                        DEFAULT_SETTINGS.doubleConfirmReactions,
+                        "Confirm React",
+                        "confirmReact",
+                        DEFAULT_SETTINGS.confirmReact,
                     ),
                     renderSwitchRow(
                         "Show Emoji In Prompt",
@@ -369,6 +433,8 @@
                 safeUnpatchAll();
                 patchAddFriendBlocker();
                 patchReactionConfirmation();
+                patchTypingManager();
+                // TODO: Add Hide Call Buttons patches here once that plugin's source/link is provided.
             } catch {}
         },
         onUnload: function () {
