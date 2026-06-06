@@ -14,14 +14,16 @@
     var toasts = ui.toasts || {};
     var storageApi = vendetta.storage || {};
 
+    var find = typeof metro.find === "function" ? metro.find : null;
+    var findByName = typeof metro.findByName === "function" ? metro.findByName : null;
     var findByProps = typeof metro.findByProps === "function" ? metro.findByProps : null;
+    var after = typeof patcher.after === "function" ? patcher.after : null;
     var instead = typeof patcher.instead === "function" ? patcher.instead : null;
     var storage = pluginApi.storage || {};
     var React = common.React || null;
     var ReactNative = common.ReactNative || {};
     var Alert = ReactNative.Alert || common.Alert || null;
     var ScrollView = ReactNative.ScrollView || null;
-    var Text = ReactNative.Text || null;
     var View = ReactNative.View || null;
     var FormSection = Forms.FormSection || null;
     var FormSwitchRow = Forms.FormSwitchRow || null;
@@ -35,6 +37,11 @@
         confirmReact: true,
         showEmojiInPrompt: false,
         noTyping: false,
+        upHideVoiceButton: true,
+        upHideVideoButton: true,
+        dmHideCallButton: false,
+        dmHideVideoButton: false,
+        hideVCVideoButton: false,
     };
 
     var REACT_PROMPT_1 = {
@@ -74,6 +81,26 @@
 
         if (storage.noTyping == null) {
             storage.noTyping = DEFAULT_SETTINGS.noTyping;
+        }
+
+        if (storage.upHideVoiceButton == null) {
+            storage.upHideVoiceButton = DEFAULT_SETTINGS.upHideVoiceButton;
+        }
+
+        if (storage.upHideVideoButton == null) {
+            storage.upHideVideoButton = DEFAULT_SETTINGS.upHideVideoButton;
+        }
+
+        if (storage.dmHideCallButton == null) {
+            storage.dmHideCallButton = DEFAULT_SETTINGS.dmHideCallButton;
+        }
+
+        if (storage.dmHideVideoButton == null) {
+            storage.dmHideVideoButton = DEFAULT_SETTINGS.dmHideVideoButton;
+        }
+
+        if (storage.hideVCVideoButton == null) {
+            storage.hideVCVideoButton = DEFAULT_SETTINGS.hideVCVideoButton;
         }
     }
 
@@ -339,6 +366,217 @@
         patchTypingMethod("stopTyping");
     }
 
+    function patchHideCallButtons() {
+        var videoCallAsset = getAssetIDByName ? getAssetIDByName("ic_video") : void 0;
+        var voiceCallAsset = getAssetIDByName ? getAssetIDByName("ic_audio") : void 0;
+        var dmVideoAsset = getAssetIDByName ? getAssetIDByName("video") : void 0;
+        var dmCallAsset = getAssetIDByName ? getAssetIDByName("nav_header_connect") : void 0;
+        var dmVideoAssetFallback = getAssetIDByName ? getAssetIDByName("VideoIcon") : void 0;
+        var dmCallAssetFallback = getAssetIDByName ? getAssetIDByName("PhoneCallIcon") : void 0;
+        var userProfileActions = findByName ? findByName("UserProfileActions", false) : null;
+        var simplifiedUserProfileContactButtons =
+            (findByName ? findByName("SimplifiedUserProfileContactButtons", false) : null) ||
+            (findByName ? findByName("UserProfileContactButtons", false) : null);
+        var privateChannelButtons = find ? find(function (module) {
+            return module && module.type && module.type.name === "PrivateChannelButtons";
+        }) : null;
+        var channelButtons = findByProps ? findByProps("ChannelButtons") : null;
+        var videoButton = findByName ? findByName("VideoButton", false) : null;
+        var unpatch;
+
+        if (videoCallAsset == null) {
+            videoCallAsset = dmVideoAssetFallback;
+        }
+
+        if (voiceCallAsset == null) {
+            voiceCallAsset = dmCallAssetFallback;
+        }
+
+        if (userProfileActions && typeof userProfileActions.default === "function" && after) {
+            unpatch = after("default", userProfileActions, function (_, component) {
+                var buttons;
+                var idx;
+
+                if (!storage.upHideVoiceButton && !storage.upHideVideoButton) {
+                    return;
+                }
+
+                buttons = component && component.props && component.props.children && component.props.children.props
+                    ? component.props.children.props.children && component.props.children.props.children[1]
+                        ? component.props.children.props.children[1].props && component.props.children.props.children[1].props.children
+                        : void 0
+                    : void 0;
+
+                if (buttons === void 0) {
+                    buttons = component && component.props && component.props.children && component.props.children[1]
+                        ? component.props.children[1].props && component.props.children[1].props.children
+                        : void 0;
+                }
+
+                if (buttons && buttons.props && buttons.props.children !== void 0) {
+                    buttons = buttons.props.children;
+                }
+
+                if (buttons === void 0) {
+                    return;
+                }
+
+                for (idx in buttons) {
+                    var button = buttons[idx];
+
+                    if (button && button.props && button.props.children !== void 0) {
+                        var buttonContainer = button.props.children;
+                        var innerIdx;
+
+                        for (innerIdx in buttonContainer) {
+                            var nestedButton = buttonContainer[innerIdx];
+
+                            if (
+                                (nestedButton && nestedButton.props && nestedButton.props.icon === voiceCallAsset && storage.upHideVoiceButton) ||
+                                (nestedButton && nestedButton.props && nestedButton.props.icon === videoCallAsset && storage.upHideVideoButton)
+                            ) {
+                                delete buttonContainer[innerIdx];
+                            }
+                        }
+                    }
+
+                    if (button && button.props && button.props.IconComponent !== void 0) {
+                        if (storage.upHideVoiceButton) delete buttons[1];
+                        if (storage.upHideVideoButton) delete buttons[2];
+                    }
+
+                    if (
+                        (button && button.props && button.props.icon === voiceCallAsset && storage.upHideVoiceButton) ||
+                        (button && button.props && button.props.icon === videoCallAsset && storage.upHideVideoButton)
+                    ) {
+                        delete buttons[idx];
+                    }
+                }
+            });
+
+            if (typeof unpatch === "function") {
+                unpatches.push(unpatch);
+            }
+        }
+
+        if (simplifiedUserProfileContactButtons && typeof simplifiedUserProfileContactButtons.default === "function" && after) {
+            unpatch = after("default", simplifiedUserProfileContactButtons, function (_, component) {
+                var buttons = component && component.props ? component.props.children : void 0;
+
+                if (buttons === void 0) {
+                    return;
+                }
+
+                if (storage.upHideVoiceButton) delete buttons[1];
+                if (storage.upHideVideoButton) delete buttons[2];
+            });
+
+            if (typeof unpatch === "function") {
+                unpatches.push(unpatch);
+            }
+        }
+
+        if (videoButton && typeof videoButton.default === "function" && instead) {
+            unpatch = instead("default", videoButton, function (args, orig) {
+                var normalizedArgs = Array.isArray(args) ? args : [];
+
+                if (storage.hideVCVideoButton) {
+                    return void 0;
+                }
+
+                return typeof orig === "function" ? orig.apply(videoButton, normalizedArgs) : void 0;
+            });
+
+            if (typeof unpatch === "function") {
+                unpatches.push(unpatch);
+            }
+        }
+
+        if (privateChannelButtons && typeof privateChannelButtons.type === "function" && after) {
+            unpatch = after("type", privateChannelButtons, function (_, component) {
+                var buttons;
+                var idx;
+
+                if (!storage.dmHideCallButton && !storage.dmHideVideoButton) {
+                    return;
+                }
+
+                buttons = component && component.props ? component.props.children : void 0;
+
+                if (buttons === void 0) {
+                    return;
+                }
+
+                if (buttons[0] && buttons[0].props && buttons[0].props.accessibilityLabel !== void 0) {
+                    if (storage.dmHideCallButton) delete buttons[0];
+                    if (storage.dmHideVideoButton) delete buttons[1];
+                    return;
+                }
+
+                if (buttons[0] && buttons[0].props && buttons[0].props.source === void 0) {
+                    buttons = buttons[0].props ? buttons[0].props.children : void 0;
+                }
+
+                if (buttons === void 0) {
+                    return;
+                }
+
+                for (idx in buttons) {
+                    var button = buttons[idx];
+
+                    if (
+                        (button && button.props && button.props.source === dmCallAsset && storage.dmHideCallButton) ||
+                        (button && button.props && button.props.source === dmVideoAsset && storage.dmHideVideoButton) ||
+                        (button && button.props && button.props.source === dmCallAssetFallback && storage.dmHideCallButton) ||
+                        (button && button.props && button.props.source === dmVideoAssetFallback && storage.dmHideVideoButton)
+                    ) {
+                        delete buttons[idx];
+                    }
+                }
+            });
+
+            if (typeof unpatch === "function") {
+                unpatches.push(unpatch);
+            }
+        }
+
+        if (channelButtons && typeof channelButtons.ChannelButtons === "function" && after) {
+            unpatch = after("ChannelButtons", channelButtons, function (_, component) {
+                var buttons = component && component.props ? component.props.children : void 0;
+                var idx;
+
+                if (!storage.dmHideCallButton && !storage.dmHideVideoButton) {
+                    return;
+                }
+
+                if (buttons === void 0) {
+                    return;
+                }
+
+                for (idx in buttons) {
+                    var button = buttons[idx] && buttons[idx].props && buttons[idx].props.children
+                        ? buttons[idx].props.children[0]
+                        : void 0;
+
+                    if (button === void 0) {
+                        continue;
+                    }
+
+                    if (
+                        (button.props && button.props.source === dmCallAsset && storage.dmHideCallButton) ||
+                        (button.props && button.props.source === dmVideoAsset && storage.dmHideVideoButton)
+                    ) {
+                        delete buttons[idx];
+                    }
+                }
+            });
+
+            if (typeof unpatch === "function") {
+                unpatches.push(unpatch);
+            }
+        }
+    }
+
     function renderSwitchRow(label, key, fallbackValue, note) {
         if (!FormSwitchRow) {
             return null;
@@ -394,14 +632,36 @@
                         'Shows "oops lol" when Add Friend is blocked.',
                     ),
                 ]),
-                renderSection("Calls", [
-                    Text
-                        ? React.createElement(
-                              Text,
-                              null,
-                              "Hide Call Buttons source is not included in this repo/context yet, so no call-button toggles are enabled.",
-                          )
-                        : null,
+                renderSection("Calls / User Profile", [
+                    renderSwitchRow(
+                        "Hide profile voice call button",
+                        "upHideVoiceButton",
+                        DEFAULT_SETTINGS.upHideVoiceButton,
+                    ),
+                    renderSwitchRow(
+                        "Hide profile video call button",
+                        "upHideVideoButton",
+                        DEFAULT_SETTINGS.upHideVideoButton,
+                    ),
+                ]),
+                renderSection("Calls / DMs", [
+                    renderSwitchRow(
+                        "Hide DM voice call button",
+                        "dmHideCallButton",
+                        DEFAULT_SETTINGS.dmHideCallButton,
+                    ),
+                    renderSwitchRow(
+                        "Hide DM video call button",
+                        "dmHideVideoButton",
+                        DEFAULT_SETTINGS.dmHideVideoButton,
+                    ),
+                ]),
+                renderSection("Calls / Voice Chat", [
+                    renderSwitchRow(
+                        "Hide VC video button",
+                        "hideVCVideoButton",
+                        DEFAULT_SETTINGS.hideVCVideoButton,
+                    ),
                 ]),
                 renderSection("Typing", [
                     renderSwitchRow(
@@ -434,7 +694,7 @@
                 patchAddFriendBlocker();
                 patchReactionConfirmation();
                 patchTypingManager();
-                // TODO: Add Hide Call Buttons patches here once that plugin's source/link is provided.
+                patchHideCallButtons();
             } catch {}
         },
         onUnload: function () {

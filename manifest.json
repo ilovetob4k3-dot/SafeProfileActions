@@ -1,13 +1,13 @@
 {
     "name": "SafeProfileActions",
-    "description": "Blocks Add Friend, double-confirms reacts, and can suppress typing updates.",
+    "description": "Blocks Add Friend, confirms reacts, hides typing, and can hide call buttons.",
     "authors": [
         {
             "name": "Codex",
             "id": "0"
         }
     ],
-    "hash": "1.0.0-add-friend-react-typing",
+    "hash": "1.1.0-add-friend-react-typing-calls",
     "main": "index.js",
     "vendetta": {
         "icon": "ic_call_ended"

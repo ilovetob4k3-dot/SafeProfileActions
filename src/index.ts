@@ -1,6 +1,6 @@
 import { ReactNative } from "@vendetta/metro/common";
-import { findByProps } from "@vendetta/metro";
-import { instead } from "@vendetta/patcher";
+import { find, findByName, findByProps } from "@vendetta/metro";
+import { after, instead } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 import { showToast } from "@vendetta/ui/toasts";
@@ -12,6 +12,11 @@ const DEFAULT_SETTINGS = {
     confirmReact: true,
     showEmojiInPrompt: false,
     noTyping: false,
+    upHideVoiceButton: true,
+    upHideVideoButton: true,
+    dmHideCallButton: false,
+    dmHideVideoButton: false,
+    hideVCVideoButton: false,
 };
 
 const REACT_PROMPT_1 = {
@@ -37,6 +42,11 @@ function initSettings() {
     storage.confirmReact ??= storage.doubleConfirmReactions ?? storage.confirmReactions ?? DEFAULT_SETTINGS.confirmReact;
     storage.showEmojiInPrompt ??= DEFAULT_SETTINGS.showEmojiInPrompt;
     storage.noTyping ??= DEFAULT_SETTINGS.noTyping;
+    storage.upHideVoiceButton ??= DEFAULT_SETTINGS.upHideVoiceButton;
+    storage.upHideVideoButton ??= DEFAULT_SETTINGS.upHideVideoButton;
+    storage.dmHideCallButton ??= DEFAULT_SETTINGS.dmHideCallButton;
+    storage.dmHideVideoButton ??= DEFAULT_SETTINGS.dmHideVideoButton;
+    storage.hideVCVideoButton ??= DEFAULT_SETTINGS.hideVCVideoButton;
 }
 
 function safeUnpatchAll() {
@@ -186,7 +196,7 @@ async function confirmAndAddReaction(context: unknown, orig: Function | undefine
 
 function patchAddFriendBlocker() {
     const relationshipManager = resolveRelationshipManager();
-    if (!relationshipManager) return;
+    if (!relationshipManager || !instead) return;
 
     const unpatch = instead("addRelationship", relationshipManager, (args, orig) => {
         const normalizedArgs = Array.isArray(args) ? args : [];
@@ -209,7 +219,7 @@ function patchAddFriendBlocker() {
 
 function patchReactionConfirmation() {
     const reactionManager = resolveReactionManager();
-    if (!reactionManager) return;
+    if (!reactionManager || !instead) return;
 
     const unpatch = instead("addReaction", reactionManager, (args, orig) => {
         const normalizedArgs = Array.isArray(args) ? args : [];
@@ -229,7 +239,7 @@ function patchReactionConfirmation() {
 
 function patchTypingManager() {
     const typingManager = resolveTypingManager();
-    if (!typingManager) return;
+    if (!typingManager || !instead) return;
 
     const patchTypingMethod = (methodName: "startTyping" | "stopTyping") => {
         if (typeof typingManager[methodName] !== "function") return;
@@ -253,6 +263,160 @@ function patchTypingManager() {
     patchTypingMethod("stopTyping");
 }
 
+function patchHideCallButtons() {
+    const videoCallAsset = getAssetIDByName("ic_video") ?? getAssetIDByName("VideoIcon");
+    const voiceCallAsset = getAssetIDByName("ic_audio") ?? getAssetIDByName("PhoneCallIcon");
+    const dmVideoAsset = getAssetIDByName("video");
+    const dmCallAsset = getAssetIDByName("nav_header_connect");
+    const dmVideoAssetFallback = getAssetIDByName("VideoIcon");
+    const dmCallAssetFallback = getAssetIDByName("PhoneCallIcon");
+
+    const userProfileActions = findByName("UserProfileActions", false);
+    const simplifiedUserProfileContactButtons =
+        findByName("SimplifiedUserProfileContactButtons", false) ?? findByName("UserProfileContactButtons", false);
+    const privateChannelButtons = find((module) => module?.type?.name === "PrivateChannelButtons");
+    const channelButtons = findByProps("ChannelButtons");
+    const videoButton = findByName("VideoButton", false);
+
+    if (userProfileActions && typeof userProfileActions.default === "function" && after) {
+        const unpatch = after("default", userProfileActions, (_, component) => {
+            if (!storage.upHideVoiceButton && !storage.upHideVideoButton) return;
+
+            let buttons = component?.props?.children?.props?.children?.[1]?.props?.children;
+            if (buttons === undefined) {
+                buttons = component?.props?.children?.[1]?.props?.children;
+            }
+            if (buttons?.props?.children !== undefined) {
+                buttons = buttons.props.children;
+            }
+            if (buttons === undefined) return;
+
+            for (const idx in buttons) {
+                const button = buttons[idx];
+
+                if (button?.props?.children !== undefined) {
+                    const buttonContainer = button.props.children;
+
+                    for (const innerIdx in buttonContainer) {
+                        const nestedButton = buttonContainer[innerIdx];
+
+                        if (
+                            (nestedButton?.props?.icon === voiceCallAsset && storage.upHideVoiceButton) ||
+                            (nestedButton?.props?.icon === videoCallAsset && storage.upHideVideoButton)
+                        ) {
+                            delete buttonContainer[innerIdx];
+                        }
+                    }
+                }
+
+                if (button?.props?.IconComponent !== undefined) {
+                    if (storage.upHideVoiceButton) delete buttons[1];
+                    if (storage.upHideVideoButton) delete buttons[2];
+                }
+
+                if (
+                    (button?.props?.icon === voiceCallAsset && storage.upHideVoiceButton) ||
+                    (button?.props?.icon === videoCallAsset && storage.upHideVideoButton)
+                ) {
+                    delete buttons[idx];
+                }
+            }
+        });
+
+        if (typeof unpatch === "function") {
+            unpatches.push(unpatch);
+        }
+    }
+
+    if (simplifiedUserProfileContactButtons && typeof simplifiedUserProfileContactButtons.default === "function" && after) {
+        const unpatch = after("default", simplifiedUserProfileContactButtons, (_, component) => {
+            const buttons = component?.props?.children;
+            if (buttons === undefined) return;
+
+            if (storage.upHideVoiceButton) delete buttons[1];
+            if (storage.upHideVideoButton) delete buttons[2];
+        });
+
+        if (typeof unpatch === "function") {
+            unpatches.push(unpatch);
+        }
+    }
+
+    if (videoButton && typeof videoButton.default === "function" && instead) {
+        const unpatch = instead("default", videoButton, (args, orig) => {
+            if (storage.hideVCVideoButton) return undefined;
+
+            return typeof orig === "function" ? orig.apply(videoButton, Array.isArray(args) ? args : []) : undefined;
+        });
+
+        if (typeof unpatch === "function") {
+            unpatches.push(unpatch);
+        }
+    }
+
+    if (privateChannelButtons && typeof privateChannelButtons.type === "function" && after) {
+        const unpatch = after("type", privateChannelButtons, (_, component) => {
+            if (!storage.dmHideCallButton && !storage.dmHideVideoButton) return;
+
+            let buttons = component?.props?.children;
+            if (buttons === undefined) return;
+
+            if (buttons[0]?.props?.accessibilityLabel !== undefined) {
+                if (storage.dmHideCallButton) delete buttons[0];
+                if (storage.dmHideVideoButton) delete buttons[1];
+                return;
+            }
+
+            if (buttons[0]?.props?.source === undefined) {
+                buttons = buttons[0]?.props?.children;
+            }
+            if (buttons === undefined) return;
+
+            for (const idx in buttons) {
+                const button = buttons[idx];
+
+                if (
+                    (button?.props?.source === dmCallAsset && storage.dmHideCallButton) ||
+                    (button?.props?.source === dmVideoAsset && storage.dmHideVideoButton) ||
+                    (button?.props?.source === dmCallAssetFallback && storage.dmHideCallButton) ||
+                    (button?.props?.source === dmVideoAssetFallback && storage.dmHideVideoButton)
+                ) {
+                    delete buttons[idx];
+                }
+            }
+        });
+
+        if (typeof unpatch === "function") {
+            unpatches.push(unpatch);
+        }
+    }
+
+    if (channelButtons && typeof channelButtons.ChannelButtons === "function" && after) {
+        const unpatch = after("ChannelButtons", channelButtons, (_, component) => {
+            if (!storage.dmHideCallButton && !storage.dmHideVideoButton) return;
+
+            const buttons = component?.props?.children;
+            if (buttons === undefined) return;
+
+            for (const idx in buttons) {
+                const button = buttons[idx]?.props?.children?.[0];
+                if (button === undefined) continue;
+
+                if (
+                    (button?.props?.source === dmCallAsset && storage.dmHideCallButton) ||
+                    (button?.props?.source === dmVideoAsset && storage.dmHideVideoButton)
+                ) {
+                    delete buttons[idx];
+                }
+            }
+        });
+
+        if (typeof unpatch === "function") {
+            unpatches.push(unpatch);
+        }
+    }
+}
+
 export default {
     onLoad: () => {
         try {
@@ -261,7 +425,7 @@ export default {
             patchAddFriendBlocker();
             patchReactionConfirmation();
             patchTypingManager();
-            // TODO: Add Hide Call Buttons patches here once that plugin's source/link is provided.
+            patchHideCallButtons();
         } catch {}
     },
 
