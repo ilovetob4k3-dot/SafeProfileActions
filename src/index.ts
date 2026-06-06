@@ -36,6 +36,8 @@ type ReactionDiagnostic = {
     reactionFunctionName: string;
     argCountTypesOnly: string;
     argObjectKeysOnly: string;
+    reactionBurstFlagPresent: YesNo;
+    reactionBurstFlagTruthy: YesNo;
     sanitizedCallStack: string[];
 };
 
@@ -94,6 +96,21 @@ function getArgObjectKeysOnly(args: unknown[]) {
     return summaries.join(" | ") || "none";
 }
 
+function getReactionBurstFlagState(args: unknown[]) {
+    const arg4 = Array.isArray(args) ? args[3] : undefined;
+    const hasBurstKey =
+        !!arg4 &&
+        typeof arg4 === "object" &&
+        !Array.isArray(arg4) &&
+        Object.prototype.hasOwnProperty.call(arg4, "burst");
+    const burstValue = hasBurstKey ? (arg4 as { burst?: unknown }).burst : undefined;
+
+    return {
+        reactionBurstFlagPresent: yesNo(hasBurstKey),
+        reactionBurstFlagTruthy: yesNo(Boolean(burstValue)),
+    };
+}
+
 function sanitizeStackLine(line: string) {
     const trimmed = line.trim().replace(/^at\s+/, "");
     const beforeParen = trimmed.split("(")[0].trim();
@@ -123,6 +140,8 @@ function createReactionDiagnostic(overrides: Partial<ReactionDiagnostic> = {}): 
         reactionFunctionName: "none",
         argCountTypesOnly: "count=0; types=[]",
         argObjectKeysOnly: "none",
+        reactionBurstFlagPresent: "no",
+        reactionBurstFlagTruthy: "no",
         sanitizedCallStack: [],
         ...overrides,
     };
@@ -140,6 +159,8 @@ function formatReactionDiagnostic(diagnostic: ReactionDiagnostic) {
         `reaction function name: ${diagnostic.reactionFunctionName}`,
         `arg count/types only: ${diagnostic.argCountTypesOnly}`,
         `arg object keys only: ${diagnostic.argObjectKeysOnly}`,
+        `reaction burst flag present: ${diagnostic.reactionBurstFlagPresent}`,
+        `reaction burst flag truthy: ${diagnostic.reactionBurstFlagTruthy}`,
         "sanitized call stack:",
         stackLines,
     ].join("\n");
@@ -184,13 +205,15 @@ function patchReactionActions() {
 
         const unpatch = instead(methodName, module, (args, orig) => {
             const sanitizedMethodName = sanitizeFunctionName(methodName);
+            const normalizedArgs = Array.isArray(args) ? args : [];
             const diagnostic = createReactionDiagnostic({
                 reactionActionModuleFound: yesNo(moduleFound),
                 reactionAddFunctionPatched: yesNo(hasPatchedAddFunction()),
                 reactionAddFunctionFired: yesNo(REACTION_ADD_METHOD_NAMES.includes(methodName as (typeof REACTION_ADD_METHOD_NAMES)[number])),
                 reactionFunctionName: sanitizedMethodName,
-                argCountTypesOnly: getArgCountTypesOnly(Array.isArray(args) ? args : []),
-                argObjectKeysOnly: getArgObjectKeysOnly(Array.isArray(args) ? args : []),
+                argCountTypesOnly: getArgCountTypesOnly(normalizedArgs),
+                argObjectKeysOnly: getArgObjectKeysOnly(normalizedArgs),
+                ...getReactionBurstFlagState(normalizedArgs),
                 sanitizedCallStack: getSanitizedCallStack(),
             });
 

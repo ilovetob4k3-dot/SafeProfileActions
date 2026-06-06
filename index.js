@@ -125,6 +125,20 @@
         return summaries.join(" | ") || "none";
     }
 
+    function getReactionBurstFlagState(args) {
+        var arg4 = Array.isArray(args) ? args[3] : void 0;
+        var hasBurstKey = !!arg4 &&
+            typeof arg4 === "object" &&
+            !Array.isArray(arg4) &&
+            Object.prototype.hasOwnProperty.call(arg4, "burst");
+        var burstValue = hasBurstKey ? arg4.burst : void 0;
+
+        return {
+            reactionBurstFlagPresent: yesNo(hasBurstKey),
+            reactionBurstFlagTruthy: yesNo(Boolean(burstValue)),
+        };
+    }
+
     function sanitizeStackLine(line) {
         var trimmed = String(line || "").trim().replace(/^at\s+/, "");
         var beforeParen = trimmed.split("(")[0].trim();
@@ -154,6 +168,8 @@
             reactionFunctionName: "none",
             argCountTypesOnly: "count=0; types=[]",
             argObjectKeysOnly: "none",
+            reactionBurstFlagPresent: "no",
+            reactionBurstFlagTruthy: "no",
             sanitizedCallStack: [],
         };
 
@@ -178,6 +194,8 @@
             "reaction function name: " + diagnostic.reactionFunctionName,
             "arg count/types only: " + diagnostic.argCountTypesOnly,
             "arg object keys only: " + diagnostic.argObjectKeysOnly,
+            "reaction burst flag present: " + diagnostic.reactionBurstFlagPresent,
+            "reaction burst flag truthy: " + diagnostic.reactionBurstFlagTruthy,
             "sanitized call stack:",
             stackLines,
         ].join("\n");
@@ -230,13 +248,17 @@
 
             unpatch = instead(methodName, module, function (args, orig) {
                 var sanitizedMethodName = sanitizeFunctionName(methodName);
+                var normalizedArgs = Array.isArray(args) ? args : [];
+                var burstState = getReactionBurstFlagState(normalizedArgs);
                 var diagnostic = createReactionDiagnostic({
                     reactionActionModuleFound: yesNo(moduleFound),
                     reactionAddFunctionPatched: yesNo(hasPatchedAddFunction()),
                     reactionAddFunctionFired: yesNo(REACTION_ADD_METHOD_NAMES.indexOf(methodName) !== -1),
                     reactionFunctionName: sanitizedMethodName,
-                    argCountTypesOnly: getArgCountTypesOnly(Array.isArray(args) ? args : []),
-                    argObjectKeysOnly: getArgObjectKeysOnly(Array.isArray(args) ? args : []),
+                    argCountTypesOnly: getArgCountTypesOnly(normalizedArgs),
+                    argObjectKeysOnly: getArgObjectKeysOnly(normalizedArgs),
+                    reactionBurstFlagPresent: burstState.reactionBurstFlagPresent,
+                    reactionBurstFlagTruthy: burstState.reactionBurstFlagTruthy,
                     sanitizedCallStack: getSanitizedCallStack(),
                 });
 
