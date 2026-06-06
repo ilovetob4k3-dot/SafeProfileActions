@@ -1,13 +1,13 @@
 {
     "name": "SafeProfileActions",
-    "description": "Adds privacy-safe relationship action guards for risky profile actions.",
+    "description": "Silently blocks Add Friend from the profile action path.",
     "authors": [
         {
             "name": "Codex",
             "id": "0"
         }
     ],
-    "hash": "0.7.0-stable-guard-1",
+    "hash": "0.8.0-silent-block-main",
     "main": "index.js",
     "vendetta": {
         "icon": "ic_call_ended"
