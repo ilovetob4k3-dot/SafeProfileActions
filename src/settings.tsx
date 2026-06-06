@@ -1,22 +1,10 @@
-import { clipboard, React, ReactNative } from "@vendetta/metro/common";
+import { React, ReactNative } from "@vendetta/metro/common";
 import { storage } from "@vendetta/plugin";
 import { useProxy } from "@vendetta/storage";
-import { getAssetIDByName } from "@vendetta/ui/assets";
 import { Forms } from "@vendetta/ui/components";
-import { showToast } from "@vendetta/ui/toasts";
 
 const { ScrollView, View } = ReactNative;
-const { FormRow, FormSection, FormSwitchRow, FormText } = Forms;
-
-function copyDiagnostic() {
-    const diagnostic = String(storage.reactionDiagnosticText ?? "");
-    if (!diagnostic || typeof clipboard?.setString !== "function") return;
-
-    try {
-        clipboard.setString(diagnostic);
-        showToast("Reaction diagnostic copied.", getAssetIDByName("copy"));
-    } catch {}
-}
+const { FormSection, FormSwitchRow } = Forms;
 
 export default function Settings() {
     useProxy(storage);
@@ -24,20 +12,30 @@ export default function Settings() {
     return (
         <ScrollView>
             <View>
-                <FormSwitchRow
-                    label="Show block toast"
-                    value={storage.showBlockToast ?? false}
-                    onValueChange={(value) => (storage.showBlockToast = Boolean(value))}
-                    note='Shows "oops lol" when Add Friend is blocked.'
-                />
-                <FormSection title="Reaction Diagnostic">
-                    <FormRow
-                        label="Copy latest diagnostic"
-                        onPress={copyDiagnostic}
+                <FormSection title="Add Friend">
+                    <FormSwitchRow
+                        label="Show Add Friend Block Toast"
+                        value={storage.showBlockToast ?? false}
+                        onValueChange={(value) => (storage.showBlockToast = Boolean(value))}
+                        note='Shows "oops lol" when Add Friend is blocked.'
                     />
-                    <FormText selectable>
-                        {String(storage.reactionDiagnosticText ?? "No diagnostic captured yet.")}
-                    </FormText>
+                </FormSection>
+                <FormSection title="Reactions">
+                    <FormSwitchRow
+                        label="Confirm Reactions"
+                        value={storage.confirmReactions ?? true}
+                        onValueChange={(value) => (storage.confirmReactions = Boolean(value))}
+                    />
+                    <FormSwitchRow
+                        label="Double Confirm Reactions"
+                        value={storage.doubleConfirmReactions ?? true}
+                        onValueChange={(value) => (storage.doubleConfirmReactions = Boolean(value))}
+                    />
+                    <FormSwitchRow
+                        label="Show Emoji In Prompt"
+                        value={storage.showEmojiInPrompt ?? false}
+                        onValueChange={(value) => (storage.showEmojiInPrompt = Boolean(value))}
+                    />
                 </FormSection>
             </View>
         </ScrollView>

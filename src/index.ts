@@ -1,4 +1,4 @@
-import { logger } from "@vendetta";
+import { ReactNative } from "@vendetta/metro/common";
 import { findByProps } from "@vendetta/metro";
 import { instead } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
@@ -8,41 +8,50 @@ import Settings from "./settings";
 
 const DEFAULT_SETTINGS = {
     showBlockToast: false,
+    confirmReactions: true,
+    doubleConfirmReactions: true,
+    showEmojiInPrompt: false,
 };
 
-let unpatchAddRelationship: (() => void) | null = null;
-let unpatchReactionActions: Array<() => void> = [];
-
-const REACTION_ADD_METHOD_NAMES = [
-    "addReaction",
-    "addMessageReaction",
-    "createReaction",
-    "toggleReaction",
-    "addReactionBurst",
-    "addBurstReaction",
-] as const;
-
-const REACTION_DETECTION_METHOD_NAMES = ["removeReaction"] as const;
-const REACTION_METHOD_NAMES = [...REACTION_ADD_METHOD_NAMES, ...REACTION_DETECTION_METHOD_NAMES] as const;
-const DIAGNOSTIC_PREFIX = "[SafeProfileActions ReactionTracer]";
-const MAX_STACK_FRAMES = 8;
-
-type YesNo = "yes" | "no";
-
-type ReactionDiagnostic = {
-    reactionActionModuleFound: YesNo;
-    reactionAddFunctionPatched: YesNo;
-    reactionAddFunctionFired: YesNo;
-    reactionFunctionName: string;
-    argCountTypesOnly: string;
-    argObjectKeysOnly: string;
-    reactionBurstFlagPresent: YesNo;
-    reactionBurstFlagTruthy: YesNo;
-    sanitizedCallStack: string[];
+const REACT_PROMPT_1 = {
+    title: "React?",
+    body: "Are you sure you want to react to this message?",
+    confirmText: "React",
+    cancelText: "Cancel",
 };
+
+const REACT_PROMPT_2 = {
+    title: "Are you really sure?",
+    body: "This will add your reaction.",
+    confirmText: "Yes, react",
+    cancelText: "Cancel",
+};
+
+let unpatches: Array<() => void> = [];
+let reactionBypass = false;
 
 function initSettings() {
     storage.showBlockToast ??= DEFAULT_SETTINGS.showBlockToast;
+    storage.confirmReactions ??= DEFAULT_SETTINGS.confirmReactions;
+    storage.doubleConfirmReactions ??= DEFAULT_SETTINGS.doubleConfirmReactions;
+    storage.showEmojiInPrompt ??= DEFAULT_SETTINGS.showEmojiInPrompt;
+}
+
+function safeUnpatchAll() {
+    for (const unpatch of unpatches) {
+        try {
+            unpatch();
+        } catch {}
+    }
+
+    unpatches = [];
+    reactionBypass = false;
+}
+
+function safeToast(message: string) {
+    try {
+        showToast(message, getAssetIDByName("ic_message"));
+    } catch {}
 }
 
 function resolveRelationshipManager() {
@@ -50,233 +59,181 @@ function resolveRelationshipManager() {
     return typeof relationshipManager?.addRelationship === "function" ? relationshipManager : null;
 }
 
-function shouldAllowOriginal(args: any[]) {
-    const payload = Array.isArray(args) ? args[0] : null;
-    return Boolean(payload && typeof payload === "object" && payload.type === 2);
+function resolveReactionManager() {
+    const reactionManager = findByProps("addReaction");
+    return typeof reactionManager?.addReaction === "function" ? reactionManager : null;
 }
 
-function showBlockedToast() {
-    if (!storage.showBlockToast) return;
+function shouldBlockAddFriend(args: unknown[]) {
+    const payload = Array.isArray(args) ? args[0] : null;
+    return Boolean(payload && typeof payload === "object" && (payload as { type?: unknown }).type !== 2);
+}
+
+function sanitizeEmojiName(emoji: unknown) {
+    const rawName =
+        emoji && typeof emoji === "object" && typeof (emoji as { name?: unknown }).name === "string"
+            ? (emoji as { name: string }).name
+            : "";
+    const sanitized = rawName.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 64);
+
+    return sanitized || null;
+}
+
+function getReactionPromptBody(defaultBody: string, args: unknown[]) {
+    if (!storage.showEmojiInPrompt) return defaultBody;
+
+    const emojiName = sanitizeEmojiName(Array.isArray(args) ? args[2] : null);
+    return emojiName ?? defaultBody;
+}
+
+function showConfirmationPrompt(options: {
+    title: string;
+    body: string;
+    confirmText: string;
+    cancelText: string;
+}) {
+    const Alert = ReactNative?.Alert;
+
+    if (!Alert || typeof Alert.alert !== "function") {
+        return Promise.resolve(false);
+    }
+
+    return new Promise<boolean>((resolve) => {
+        let settled = false;
+        const settle = (value: boolean) => {
+            if (settled) return;
+            settled = true;
+            resolve(value);
+        };
+
+        try {
+            Alert.alert(
+                options.title,
+                options.body,
+                [
+                    {
+                        text: options.cancelText,
+                        style: "cancel",
+                        onPress: () => settle(false),
+                    },
+                    {
+                        text: options.confirmText,
+                        onPress: () => settle(true),
+                    },
+                ],
+                {
+                    cancelable: false,
+                },
+            );
+        } catch {
+            settle(false);
+        }
+    });
+}
+
+function callOriginalAddReaction(context: unknown, orig: Function | undefined, args: unknown[]) {
+    if (typeof orig !== "function") {
+        return Promise.resolve(null);
+    }
+
+    reactionBypass = true;
 
     try {
-        showToast("oops lol", getAssetIDByName("ic_message"));
-    } catch {}
-}
+        const result = orig.apply(context, args);
 
-function yesNo(value: boolean): YesNo {
-    return value ? "yes" : "no";
-}
-
-function sanitizeFunctionName(value: string) {
-    const sanitized = value.replace(/[^A-Za-z0-9_$]/g, "");
-    return sanitized || "unknown";
-}
-
-function getArgType(value: unknown) {
-    if (value === null) return "null";
-    if (Array.isArray(value)) return "array";
-    return typeof value;
-}
-
-function getArgCountTypesOnly(args: unknown[]) {
-    const types = args.map((arg) => getArgType(arg));
-    return `count=${args.length}; types=[${types.join(", ")}]`;
-}
-
-function getArgObjectKeysOnly(args: unknown[]) {
-    const summaries = args.map((arg, index) => {
-        if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
-            return `arg${index}:[]`;
+        if (result && typeof (result as Promise<unknown>).finally === "function") {
+            return (result as Promise<unknown>).finally(() => {
+                reactionBypass = false;
+            });
         }
 
-        const keys = Object.keys(arg as Record<string, unknown>).sort();
-        return `arg${index}:[${keys.join(", ")}]`;
+        reactionBypass = false;
+        return result;
+    } catch (error) {
+        reactionBypass = false;
+        throw error;
+    }
+}
+
+async function confirmAndAddReaction(context: unknown, orig: Function | undefined, args: unknown[]) {
+    const firstConfirmed = await showConfirmationPrompt({
+        title: REACT_PROMPT_1.title,
+        body: getReactionPromptBody(REACT_PROMPT_1.body, args),
+        confirmText: REACT_PROMPT_1.confirmText,
+        cancelText: REACT_PROMPT_1.cancelText,
     });
 
-    return summaries.join(" | ") || "none";
-}
+    if (!firstConfirmed) return;
 
-function getReactionBurstFlagState(args: unknown[]) {
-    const arg4 = Array.isArray(args) ? args[3] : undefined;
-    const hasBurstKey =
-        !!arg4 &&
-        typeof arg4 === "object" &&
-        !Array.isArray(arg4) &&
-        Object.prototype.hasOwnProperty.call(arg4, "burst");
-    const burstValue = hasBurstKey ? (arg4 as { burst?: unknown }).burst : undefined;
-
-    return {
-        reactionBurstFlagPresent: yesNo(hasBurstKey),
-        reactionBurstFlagTruthy: yesNo(Boolean(burstValue)),
-    };
-}
-
-function sanitizeStackLine(line: string) {
-    const trimmed = line.trim().replace(/^at\s+/, "");
-    const beforeParen = trimmed.split("(")[0].trim();
-    const matched = beforeParen.match(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/g);
-    const candidate = matched?.[matched.length - 1] ?? "";
-
-    return candidate || "anonymous";
-}
-
-function getSanitizedCallStack() {
-    const stack = new Error().stack;
-    if (!stack) return [];
-
-    return stack
-        .split("\n")
-        .slice(2)
-        .map(sanitizeStackLine)
-        .filter(Boolean)
-        .slice(0, MAX_STACK_FRAMES);
-}
-
-function createReactionDiagnostic(overrides: Partial<ReactionDiagnostic> = {}): ReactionDiagnostic {
-    return {
-        reactionActionModuleFound: "no",
-        reactionAddFunctionPatched: "no",
-        reactionAddFunctionFired: "no",
-        reactionFunctionName: "none",
-        argCountTypesOnly: "count=0; types=[]",
-        argObjectKeysOnly: "none",
-        reactionBurstFlagPresent: "no",
-        reactionBurstFlagTruthy: "no",
-        sanitizedCallStack: [],
-        ...overrides,
-    };
-}
-
-function formatReactionDiagnostic(diagnostic: ReactionDiagnostic) {
-    const stackLines = diagnostic.sanitizedCallStack.length
-        ? diagnostic.sanitizedCallStack.map((frame) => `- ${frame}`).join("\n")
-        : "- none";
-
-    return [
-        `reaction action module found: ${diagnostic.reactionActionModuleFound}`,
-        `reaction add function patched: ${diagnostic.reactionAddFunctionPatched}`,
-        `reaction add function fired: ${diagnostic.reactionAddFunctionFired}`,
-        `reaction function name: ${diagnostic.reactionFunctionName}`,
-        `arg count/types only: ${diagnostic.argCountTypesOnly}`,
-        `arg object keys only: ${diagnostic.argObjectKeysOnly}`,
-        `reaction burst flag present: ${diagnostic.reactionBurstFlagPresent}`,
-        `reaction burst flag truthy: ${diagnostic.reactionBurstFlagTruthy}`,
-        "sanitized call stack:",
-        stackLines,
-    ].join("\n");
-}
-
-function commitReactionDiagnostic(diagnostic: ReactionDiagnostic) {
-    storage.reactionDiagnostic = diagnostic;
-    storage.reactionDiagnosticText = formatReactionDiagnostic(diagnostic);
-}
-
-function showReactionTracerToast(functionName: string) {
-    try {
-        showToast(`Reaction tracer: ${functionName}`, getAssetIDByName("ic_message"));
-    } catch {}
-}
-
-function safePushUnpatch(unpatch: unknown) {
-    if (typeof unpatch === "function") {
-        unpatchReactionActions.push(unpatch);
-    }
-}
-
-function patchReactionActions() {
-    if (!instead || typeof findByProps !== "function") {
-        commitReactionDiagnostic(createReactionDiagnostic());
-        return;
-    }
-
-    const patchedMethods = new Set<string>();
-    const hasPatchedAddFunction = () =>
-        REACTION_ADD_METHOD_NAMES.some((methodName) => patchedMethods.has(methodName));
-    let moduleFound = false;
-
-    for (const methodName of REACTION_METHOD_NAMES) {
-        const module = findByProps(methodName);
-
-        if (!module || typeof module[methodName] !== "function" || patchedMethods.has(methodName)) {
-            continue;
-        }
-
-        moduleFound = true;
-
-        const unpatch = instead(methodName, module, (args, orig) => {
-            const sanitizedMethodName = sanitizeFunctionName(methodName);
-            const normalizedArgs = Array.isArray(args) ? args : [];
-            const diagnostic = createReactionDiagnostic({
-                reactionActionModuleFound: yesNo(moduleFound),
-                reactionAddFunctionPatched: yesNo(hasPatchedAddFunction()),
-                reactionAddFunctionFired: yesNo(REACTION_ADD_METHOD_NAMES.includes(methodName as (typeof REACTION_ADD_METHOD_NAMES)[number])),
-                reactionFunctionName: sanitizedMethodName,
-                argCountTypesOnly: getArgCountTypesOnly(normalizedArgs),
-                argObjectKeysOnly: getArgObjectKeysOnly(normalizedArgs),
-                ...getReactionBurstFlagState(normalizedArgs),
-                sanitizedCallStack: getSanitizedCallStack(),
-            });
-
-            commitReactionDiagnostic(diagnostic);
-            logger.log(`${DIAGNOSTIC_PREFIX}\n${formatReactionDiagnostic(diagnostic)}`);
-            showReactionTracerToast(sanitizedMethodName);
-
-            return typeof orig === "function" ? orig.apply(module, args) : undefined;
+    if (storage.doubleConfirmReactions) {
+        const secondConfirmed = await showConfirmationPrompt({
+            title: REACT_PROMPT_2.title,
+            body: getReactionPromptBody(REACT_PROMPT_2.body, args),
+            confirmText: REACT_PROMPT_2.confirmText,
+            cancelText: REACT_PROMPT_2.cancelText,
         });
 
-        safePushUnpatch(unpatch);
-        patchedMethods.add(methodName);
+        if (!secondConfirmed) return;
     }
 
-    commitReactionDiagnostic(
-        createReactionDiagnostic({
-            reactionActionModuleFound: yesNo(moduleFound),
-            reactionAddFunctionPatched: yesNo(hasPatchedAddFunction()),
-        })
-    );
+    callOriginalAddReaction(context, orig, args);
 }
 
-function safeUnpatch() {
-    if (typeof unpatchAddRelationship === "function") {
-        try {
-            unpatchAddRelationship();
-        } catch {}
+function patchAddFriendBlocker() {
+    const relationshipManager = resolveRelationshipManager();
+    if (!relationshipManager) return;
+
+    const unpatch = instead("addRelationship", relationshipManager, (args, orig) => {
+        const normalizedArgs = Array.isArray(args) ? args : [];
+
+        if (!shouldBlockAddFriend(normalizedArgs)) {
+            return typeof orig === "function" ? orig.apply(relationshipManager, args) : undefined;
+        }
+
+        if (storage.showBlockToast) {
+            safeToast("oops lol");
+        }
+
+        return Promise.resolve(null);
+    });
+
+    if (typeof unpatch === "function") {
+        unpatches.push(unpatch);
     }
+}
 
-    unpatchAddRelationship = null;
+function patchReactionConfirmation() {
+    const reactionManager = resolveReactionManager();
+    if (!reactionManager) return;
 
-    for (const unpatch of unpatchReactionActions) {
-        try {
-            unpatch();
-        } catch {}
+    const unpatch = instead("addReaction", reactionManager, (args, orig) => {
+        const normalizedArgs = Array.isArray(args) ? args : [];
+
+        if (reactionBypass || !storage.confirmReactions) {
+            return typeof orig === "function" ? orig.apply(reactionManager, args) : undefined;
+        }
+
+        void confirmAndAddReaction(reactionManager, orig, normalizedArgs);
+        return Promise.resolve(null);
+    });
+
+    if (typeof unpatch === "function") {
+        unpatches.push(unpatch);
     }
-
-    unpatchReactionActions = [];
 }
 
 export default {
     onLoad: () => {
         try {
             initSettings();
-            safeUnpatch();
-            patchReactionActions();
-
-            const relationshipManager = resolveRelationshipManager();
-            if (!relationshipManager) return;
-
-            unpatchAddRelationship = instead("addRelationship", relationshipManager, (args, orig) => {
-                if (shouldAllowOriginal(args)) {
-                    return typeof orig === "function" ? orig.apply(relationshipManager, args) : undefined;
-                }
-
-                showBlockedToast();
-                return Promise.resolve(null);
-            });
+            safeUnpatchAll();
+            patchAddFriendBlocker();
+            patchReactionConfirmation();
         } catch {}
     },
 
     onUnload: () => {
-        safeUnpatch();
+        safeUnpatchAll();
     },
 
     settings: Settings,
